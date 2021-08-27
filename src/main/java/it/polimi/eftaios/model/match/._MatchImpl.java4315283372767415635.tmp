@@ -1,0 +1,297 @@
+package it.polimi.eftaios.model.match;
+
+import it.polimi.eftaios.controller.Communicator;
+import it.polimi.eftaios.exception.PlayerCanNotAttackException;
+import it.polimi.eftaios.model.card.ObjectCard;
+import it.polimi.eftaios.model.card.ProtectionCard;
+import it.polimi.eftaios.model.card.SectorCard;
+import it.polimi.eftaios.model.deck.DeckObject;
+import it.polimi.eftaios.model.deck.DeckSector;
+import it.polimi.eftaios.model.deck.DeckShallop;
+import it.polimi.eftaios.model.map.GameMap;
+import it.polimi.eftaios.model.player.Alien;
+import it.polimi.eftaios.model.player.Human;
+import it.polimi.eftaios.model.player.Player;
+import it.polimi.eftaios.model.player.PlayerName;
+import it.polimi.eftaios.model.position.Position;
+import it.polimi.eftaios.model.sector.Sector;
+import it.polimi.eftaios.observer.AttackEvent;
+import it.polimi.eftaios.observer.BaseObservable;
+import it.polimi.eftaios.observer.ChangePositionEvent;
+import it.polimi.eftaios.observer.CommandEvent;
+import it.polimi.eftaios.observer.CurrentStateEvent;
+import it.polimi.eftaios.observer.DangerousStateEvent;
+import it.polimi.eftaios.observer.DiscardObjectCardEvent;
+import it.polimi.eftaios.observer.DrawSectorCardEvent;
+import it.polimi.eftaios.observer.EndMatchNotify;
+import it.polimi.eftaios.observer.EscapeStateEvent;
+import it.polimi.eftaios.observer.LightEvent;
+import it.polimi.eftaios.observer.NewMatchEvent;
+import it.polimi.eftaios.observer.NotifyAllPlayerEvent;
+import it.polimi.eftaios.observer.ObjectAddToHandEvent;
+import it.polimi.eftaios.observer.ObjectCardEvent;
+import it.polimi.eftaios.observer.PlayerExcapedEvent;
+import it.polimi.eftaios.observer.SafeStateEvent;
+import it.polimi.eftaios.observer.ShallopDamageNotify;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class MatchImpl extends BaseObservable implements Match {
+	public final static int NUM_ROUND = 39;
+	private final static int LIGHT_DEPTH = 1;
+	private final GameMap gameMap;
+	private final Map<Player, Position> playersDisposition;
+	private final DeckSector deckSector;
+	private final DeckObject deckObject;
+	private final DeckShallop deckShallop;
+	private final List<Player> players;
+	private final List<Communicator> clients;
+
+	private int currentPlayerIndex = 0;
+	private int currentRound = 1;
+	
+	public MatchImpl(List<Communicator> clients) {
+		this.clients = clients;
+		gameMap = new GameMap();
+		players = buildPlayers(clients.size());
+		playersDisposition = buildPlayersDisposition();
+		deckSector = new DeckSector();
+		deckObject = new DeckObject();
+		deckShallop = new DeckShallop();
+	}
+
+	private Map<Player, Position> buildPlayersDisposition() {
+		Map<Player, Position> disposition=new HashMap<Player, Position>();
+		Position alienStart = gameMap.getAlienStartPosition();
+		Position humanStart = gameMap.getHumanStartPosition();
+		for(Player p : players) {
+			if(p.getCanUseObjectCard()) {
+				disposition.put(p, humanStart);
+			}
+			else {
+				disposition.put(p, alienStart);
+			}
+		}
+	  return disposition;
+  }
+
+	private List<Player> buildPlayers(int numberOfPlayer) {
+		List<Player> players = new ArrayList<Player>();
+		int playerPosition = 1;
+		int alienNamePosition = 4;
+		for(; playerPosition<=numberOfPlayer/2; playerPosition++) {
+			players.add(new Human(PlayerName.getHumanName(playerPosition)));
+		}
+		for(; playerPosition<=numberOfPlayer; playerPosition++) {
+			players.add(new Alien(PlayerName.getAlienName(alienNamePosition)));
+			alienNamePosition++;
+		}
+		Collections.shuffle(players);
+		return players;
+  }
+
+	public void startGame(MatchImpl match){
+		
+		Position position =  getPlayersDisposition().get(getCurrentPlayer());
+		newMatchNotify(match);
+		currentStateNotify(getCurrentPlayer(), getGameMap().getSector(position));
+	}
+	
+	@Override
+	public int getCurrentRound() {
+		return currentRound;
+	}
+	@Override
+	public DeckSector getDeckSector() {
+		return deckSector;
+	}
+	
+	@Override
+	public DeckObject getDeckObject() {
+		return deckObject;
+	}
+	
+	@Override
+	public DeckShallop getDeckShallop() {
+		return deckShallop;
+	}
+	
+	@Override
+	public Map<Player, Position> getPlayersDisposition() {
+		return playersDisposition;
+	}
+	
+	@Override
+	public GameMap getGameMap() {
+		return gameMap;
+	}
+	
+	@Override
+	public Player getCurrentPlayer() {
+		return players.get(currentPlayerIndex);
+	}
+	
+	public void selectNextPlayer() {
+		if(currentPlayerIndex == players.size() - 1) {
+			currentPlayerIndex=0;
+			currentRound++;
+		}
+		else {
+			currentPlayerIndex++;
+		}
+	}
+	
+	public Position getPlayerPosition(Player player) {
+		return playersDisposition.get(player);
+	}
+	
+	public void currentStateNotify(Player player, Sector sector){
+		notify(new CurrentStateEvent(player,sector));
+	}
+	
+	public void attackNotify(Player attacker, Set<Player> killedPlayer, Sector sector) {
+		notify(new AttackEvent(attacker, killedPlayer, sector));
+	}
+	
+	public void objectCardNotify(Player player, ObjectCard cardUsed) {
+		notify(new ObjectCardEvent(player,cardUsed));
+	}
+	
+	public void drawSectorCardNotify(SectorCard card){
+		notify(new DrawSectorCardEvent(card));
+	}
+	
+	public void playerExcapedNotify(Player player, Sector sector) {
+		notify(new PlayerExcapedEvent(player,sector));
+	}
+	
+	public void objectAddToHandNotify(ObjectCard cardDrawn) {
+		notify(new ObjectAddToHandEvent(cardDrawn));
+	}
+
+	public void changePositionNotify(Sector sector) {
+	  notify(new ChangePositionEvent(sector));
+  }
+	
+	public void dangerousStateNotify(){
+		notify(new DangerousStateEvent());
+	}
+
+	public void endGame() {
+	  // TODO Auto-generated method stub
+	  
+  }
+	
+	public void discardObjectCardNotify(){
+		notify(new DiscardObjectCardEvent());
+	}
+	
+	public void safeStateNotify(){
+		notify(new SafeStateEvent());
+	}
+	
+	public void escapeStateNotify(){
+		notify(new EscapeStateEvent());
+	}
+	
+	public void commandNotify(){
+		notify(new CommandEvent());
+	}
+	
+	public void shallopDamageNotify(Player player, Sector sector){
+		notify(new ShallopDamageNotify(player,sector));
+	}
+	
+	public void endMatchNotify(boolean result){
+		notify(new EndMatchNotify(result));
+	}
+	
+	public void notifyAllPlayer(String msg){
+		notify(new NotifyAllPlayerEvent(msg));
+	}
+
+	@Override
+  public Communicator getCurrentClient() {
+	  return clients.get(currentPlayerIndex);
+  }
+	
+	public void newMatchNotify(MatchImpl match){
+		notify(new NewMatchEvent(match));
+	}
+
+	@Override
+  public int getNumberOfHumanInGame() {
+	  int number = 0;
+	  for(Player player : getPlayersDisposition().keySet()){
+	  	if(!player.canBeFed() && player.isAlive() && !player.isEscaped())
+	  		number++;
+	  }
+	  return number;
+  }
+	
+	public void lightImplemetation(Position position){
+		Set<Sector> adjacentSector = gameMap.getAdjacentValidSector(position, LIGHT_DEPTH);
+		adjacentSector.add(gameMap.getSector(position));
+		for(Player player : playersDisposition.keySet()){
+			Position playerPosition = playersDisposition.get(player);
+			Sector playerSector = gameMap.getSector(playerPosition);
+			if(adjacentSector.contains(playerSector) && !(player.equals(getCurrentPlayer()))){
+				notify(new LightEvent(player,playerSector));
+			}
+		}
+	}
+	
+ public Set<Player> attack( ){
+		
+		Position currentPosition = playersDisposition.get(getCurrentPlayer());
+		Player player = getCurrentPlayer();
+		Set<Player> killedPlayers = new HashSet<Player>();
+		if(player.canAttack()){
+				
+			for(Player otherPlayer: playersDisposition.keySet()){
+					
+					if(playersDisposition.get(otherPlayer).equals(currentPosition) && otherPlayer.isAlive() && !otherPlayer.isEscaped()){
+						
+						if(!(otherPlayer.equals(player))){
+							
+							if(otherPlayer.getCanUseObjectCard()){
+
+								if(!(otherPlayer.haveProtectionCard())){
+									otherPlayer.discardAll(deckObject);
+									otherPlayer.dies();
+									killedPlayers.add(otherPlayer);
+								}
+								else{
+									ProtectionCard card = new ProtectionCard();
+									deckObject.discard(card);
+									objectCardNotify(otherPlayer,card);
+								}
+							}
+							else{
+								
+								otherPlayer.dies();
+								otherPlayer.discardAll(deckObject);
+								killedPlayers.add(otherPlayer);
+							}
+						}
+					}
+				}
+				if(!(killedPlayers.isEmpty())){
+					if(player.canBeFed()){
+						player.feed();
+				}
+			}
+		}
+		else {
+			throw new PlayerCanNotAttackException();
+		}
+		return killedPlayers;
+	}
+}
+
